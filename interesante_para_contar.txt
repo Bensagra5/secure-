@@ -1,0 +1,4 @@
+31/7
+{
+    TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts"
+}

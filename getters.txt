@@ -1,0 +1,10 @@
+GET => Usuario y contraseña <== User  *userLogin*
+GET => Piso seleccionado <== Carros habilitados *getCarros*
+GET => User y un carro <==  Token y computadora habilitada 
+GET => User <== Otro token devolucion
+GET => - <== Ciclo escolar
+GET => Ciclo escolar seleccionado <== Cursos
+GET => Cantidad computadoras <== Token
+BUSCADOR
+
+GET => Token <== [] === NULL && [contiene] correcto

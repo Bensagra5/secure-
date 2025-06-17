@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL") // uses connection pooling
+  directUrl = env("POSTGRES_URL_NON_POOLING") // uses a direct connection
+}
+
+model User {
+  id          Int     @unique  @id @default(autoincrement())
+  occupation  String
+  nfc         String? @unique
+  username    String    @unique
+  password    String
+  tokens      Token[]   // Relación 1-n con Token
+  avatar String
+}
+
+
+
+model Computer {
+  id              Int          @id @default(autoincrement()) @unique
+  rfid            String       @unique
+  cartId          Int?         // Clave foránea hacia Cart, ahora es opcional
+  slot            Int?
+  checkInTime     DateTime
+  checkOutTime    DateTime
+  cart            Cart?        @relation(fields: [cartId], references: [id]) // Relación n-1 con Cart
+  tokens          ComputerToken[]  // Relación muchos a muchos con Token a través de ComputerToken
+
+  @@unique([cartId, slot]) // Índice único en cartId y slot
+}
+
+
+model Token {
+  id              String          @id
+  userId          Int
+  cartId          Int?            // Elimina @unique aquí
+  status          String
+  createdAt       DateTime    
+  user            User            @relation(fields: [userId], references: [id])
+  cart            Cart?           @relation(fields: [cartId], references: [id]) // Relación n-1
+  computers       ComputerToken[] // Relación muchos a muchos con Computer a través de ComputerToken
+
+  @@index([createdAt])
+}
+
+model Cart {
+  id           Int         @id @default(autoincrement())
+  roomId       Int  
+  slots        Int 
+  room         Room        @relation(fields: [roomId], references: [id])
+  computers    Computer[]  // Relación 1-n con Computer
+  tokens       Token[]     // Relación 1-n con Token, ahora puede tener varios tokens
+}
+
+
+model Room {
+  id            Int      @id @default(autoincrement())
+  roomNumber    String   @unique
+  carts         Cart[]   // Relación 1-n con Cart
+}
+
+// Tabla intermedia para la relación muchos a muchos entre Token y Computer con slot
+model ComputerToken {
+  computerId  Int
+  tokenId     String
+  slot        Int
+
+  computer    Computer  @relation(fields: [computerId], references: [id])
+  token       Token     @relation(fields: [tokenId], references: [id])
+
+  @@id([computerId, tokenId])
+}
