@@ -1,7 +1,5 @@
-import bcryptjs from 'bcryptjs';
 
 import { prisma } from "../client.js";
-import { token } from 'morgan';
 
 const status = {
   inProcess: "En proceso",

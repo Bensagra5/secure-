@@ -1,7 +1,5 @@
 import { prisma } from '../client.js';
 import CryptoJS from 'crypto-js';
-import { token } from 'morgan';
-import { randomUUID } from 'crypto';
 import { professorControllers } from './professor_controllers.js';
 
 

@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import { prisma } from '../client.js';
 import CryptoJS from 'crypto-js';
 
@@ -15,7 +14,6 @@ const status = {
 
 
 // Función para retirar computadoras
-
 
 
 // Función para retornar computadoras usando RFID
@@ -190,6 +188,7 @@ const getProfessorComputers = async(req,res)=>{
   }
   
 }
+
 
 
 
