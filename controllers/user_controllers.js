@@ -120,6 +120,9 @@ const userStatus = async (req, res) => {
       where: {
         userId: parseInt(req.body.userId),
       },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
     console.log(await hola);
     if (!hola) {
