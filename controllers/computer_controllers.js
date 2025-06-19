@@ -18,22 +18,29 @@ const requestComputer = async (req, res) => {
 
   const { token: incomingToken, rfid, userId: rawUserId, cartId: rawCartId } = req.body;
   const cartId = parseInt(rawCartId);
-  let userId;
+  const isRFID = !incomingToken; // si viene por RFID
   let user;
 
-  // 1) Obtener usuario
+  // 1) Obtener usuario según token o RFID
   try {
-    if (!incomingToken) {
+    if (isRFID) {
       user = await prisma.user.findUnique({ where: { nfc: rfid } });
     } else {
-      userId = parseInt(rawUserId);
-      user = await prisma.user.findUnique({ where: { id: userId } });
+      const id = parseInt(rawUserId);
+      user = await prisma.user.findUnique({ where: { id } });
     }
-    if (!user) throw new Error("Usuario no encontrado");
-    userId = user.id;
-  } catch (error) {
-    return res.status(500).json({ error: "Error al obtener el usuario" });
+    if (!user) {
+      const err = { error: "Usuario no encontrado" };
+      return isRFID ? Promise.reject(err) : res.status(404).json(err);
+    }
+  } catch (err) {
+    console.error("Error al obtener usuario:", err);
+    return isRFID
+      ? Promise.reject({ error: "Error al obtener el usuario" })
+      : res.status(500).json({ error: "Error al obtener el usuario" });
   }
+
+  const userId = user.id;
 
   try {
     // --- FLUJO PROFESOR ---
@@ -43,19 +50,20 @@ const requestComputer = async (req, res) => {
         orderBy: { createdAt: 'desc' },
       });
       if (existing) {
-        return res.status(403).json("El usuario no tiene permitido el retiro de computadoras");
+        const errMsg = { error: "El usuario no tiene permitido el retiro de computadoras" };
+        return isRFID ? Promise.reject(errMsg) : res.status(403).json(errMsg);
       }
 
       const computers = await prisma.computer.findMany({ where: { cartId } });
       if (!computers.length) {
-        return res.status(404).json({ error: "No hay computadoras disponibles." });
+        const err = { error: "No hay computadoras disponibles." };
+        return isRFID ? Promise.reject(err) : res.status(404).json(err);
       }
 
       const slots = Array(4).fill(0);
-      const compIds = [];
-      computers.forEach(({ id, slot }) => {
+      const compIds = computers.map(({ id, slot }) => {
         if (slot != null) slots[slot - 1] = 1;
-        compIds.push(id);
+        return id;
       });
 
       const now = new Date();
@@ -63,69 +71,79 @@ const requestComputer = async (req, res) => {
       const secret = process.env.SECRET_KEY || "default_secret_key";
       const encrypted = CryptoJS.AES.encrypt(JSON.stringify(payload), secret).toString();
 
-      // Transacción para crear token y relaciones
-      const token = await prisma.$transaction(async (tx) => {
-        const t = await tx.token.create({
-          data: { id: encrypted, userId, cartId, status: payload.status, createdAt: now }
+      // Transacción: crear token y relaciones
+      const tokenRecord = await prisma.$transaction(async (tx) => {
+        const token = await tx.token.create({
+          data: { id: encrypted, userId, cartId, status: status.inProcess, createdAt: now }
         });
-        await tx.computerToken.createMany({ data: compIds.map((comp, idx) => ({ computerId: comp, tokenId: t.id, slot: slots[idx] })) });
-        return t;
+        await tx.computerToken.createMany({
+          data: compIds.map((computerId, idx) => ({ computerId, tokenId: token.id, slot: slots[idx] })),
+        });
+        return token;
       });
 
-      return res.status(200).json({ tokenId: token.id, slots });
+      const result = { tokenId: tokenRecord.id, slots };
+      return isRFID ? result : res.status(200).json(result);
 
     // --- FLUJO ESTUDIANTE ---
     } else if (user.occupation === "Estudiante") {
-      const last = await prisma.token.findFirst({ where: { userId }, orderBy: { createdAt: 'desc' } });
-      if (last && last.status !== status.returned) {
-        return res.status(403).json("El usuario no tiene permitido el retiro de computadoras");
+      const lastToken = await prisma.token.findFirst({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (lastToken && lastToken.status !== status.returned) {
+        const errMsg = { error: "El usuario no tiene permitido el retiro de computadoras" };
+        return isRFID ? Promise.reject(errMsg) : res.status(403).json(errMsg);
       }
 
-      // Transacción completa de selección y creación
+      // Transacción: seleccionar y crear token para estudiante
       const result = await prisma.$transaction(async (tx) => {
         const computers = await tx.computer.findMany({ where: { cartId } });
         if (!computers.length) throw new Error("No hay computadoras en el carrito.");
 
         const now = new Date();
-        const available = [];
-        for (const c of computers) {
-          const hrs = (now - new Date(c.checkInTime)) / (3600000);
-          const busy = await tx.token.findFirst({
-            where: { computers: { some: { computerId: c.id } }, status: status.inProcess },
-            orderBy: { createdAt: 'desc' }
-          });
-          if (hrs >= 0 && !busy) available.push(c);
+        let selected = null;
+        for (const comp of computers) {
+          const elapsedHrs = (now - new Date(comp.checkInTime)) / 3600000;
+          if (elapsedHrs >= 0) {
+            const busy = await tx.token.findFirst({
+              where: { computers: { some: { computerId: comp.id } }, status: status.inProcess },
+              orderBy: { createdAt: 'desc' },
+            });
+            if (!busy) { selected = comp; break; }
+          }
         }
-        if (!available.length) throw new Error("No hay computadoras disponibles.");
+        if (!selected) throw new Error("No hay computadoras disponibles.");
 
-        const sel = available[0];
-        const now2 = new Date();
-        const payload = { userId, cartId, status: status.inProcess, createdAt: now2 };
-        const encrypted = CryptoJS.AES.encrypt(JSON.stringify({ ...payload, computers: [sel.id], slots: [sel.slot] }), process.env.SECRET_KEY || "default_secret_key").toString();
+        const payload = { userId, cartId, status: status.inProcess, createdAt: now, computers: [selected.id], slots: [selected.slot] };
+        const encrypted = CryptoJS.AES.encrypt(JSON.stringify(payload), secret).toString();
 
-        const t = await tx.token.create({
+        const token = await tx.token.create({
           data: {
             id: encrypted,
             userId,
             cartId,
-            status: payload.status,
-            createdAt: now2,
-            computers: { create: { computerId: sel.id, slot: sel.slot } }
-          }
+            status: status.inProcess,
+            createdAt: now,
+            computers: { create: { computerId: selected.id, slot: selected.slot } },
+          },
         });
 
-        return { tokenId: t.id, slots: sel.slot };
+        return { tokenId: token.id, slots: selected.slot };
       });
 
-      return res.status(200).json(result);
+      return isRFID ? result : res.status(200).json(result);
     }
 
-    // Si no es ni Profesor ni Estudiante
-    return res.status(400).json({ error: "Ocupación no válida" });
+    // Ocupación no válida
+    const err = { error: "Ocupación no válida" };
+    return isRFID ? Promise.reject(err) : res.status(400).json(err);
 
-  } catch (error) {
-    console.error("Error en requestComputer:", error);
-    return res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error("Error en requestComputer:", err);
+    if (isRFID) throw err;
+    const msg = err.error || err.message || "Error interno";
+    return res.status(500).json({ error: msg });
   }
 };
 
