@@ -138,7 +138,7 @@ const withdrawComputer = async (req, res) => {
   let tokenString = incomingToken;
   let decrypted;
 
-  // 1) Si no vino token, genero uno llamando a requestComputer
+  // 1) Si no se proporciona token, generarlo vía requestComputer
   if (!incomingToken) {
     try {
       const user = await prisma.user.findUnique({ where: { nfc: rfid } });
@@ -152,7 +152,7 @@ const withdrawComputer = async (req, res) => {
     }
   }
 
-  // 2) Desencripto el token
+  // 2) Desencriptar token
   try {
     const secret = process.env.SECRET_KEY || "default_secret_key";
     decrypted = JSON.parse(
@@ -164,11 +164,11 @@ const withdrawComputer = async (req, res) => {
   }
 
   const { status: tokenStatus, slots } = decrypted;
+  const returnSlot = decrypted.slot;
 
   try {
-    // --- CASO A: retiro único
-    if (tokenStatus === status.inProcess && slots.length === 1) {
-      // Todo en transacción
+    // --- CASO A: Retiro único (un slot)
+    if (tokenStatus === status.inProcess && Array.isArray(slots) && slots.length === 1) {
       await prisma.$transaction(async (tx) => {
         const tokenRec = await tx.token.findUnique({ where: { id: tokenString } });
         if (!tokenRec || tokenRec.status === status.withdrawn) {
@@ -185,7 +185,7 @@ const withdrawComputer = async (req, res) => {
       });
       return res.status(200).json({ type: "unico", slots });
 
-    // --- CASO B: devolución única
+    // --- CASO B: Devolución única
     } else if (tokenStatus === status.inReturnProcess) {
       await prisma.$transaction(async (tx) => {
         const tokenRec = await tx.token.findFirst({
@@ -200,13 +200,17 @@ const withdrawComputer = async (req, res) => {
         });
         await tx.computer.updateMany({
           where: { tokens: { some: { tokenId: tokenRec.id } } },
-          data: { cartId, slot: slots[0], checkInTime: new Date() },
+          data: {
+            cartId,
+            slot: returnSlot,
+            checkInTime: new Date(),
+          },
         });
       });
-      return res.status(200).json({ type: "unico", slots });
+      return res.status(200).json({ type: "unico", slots: [returnSlot] });
 
-    // --- CASO C: retiro múltiple
-    } else if (tokenStatus === status.inProcess && slots.length > 1) {
+    // --- CASO C: Retiro múltiple
+    } else if (tokenStatus === status.inProcess && Array.isArray(slots) && slots.length > 1) {
       const tokenComps = await prisma.computerToken.findMany({
         where: { tokenId: decrypted.id },
         include: { computer: true },
